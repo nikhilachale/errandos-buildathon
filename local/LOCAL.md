@@ -38,7 +38,7 @@ From the repository root:
 pnpm --dir local install
 pnpm --dir local typecheck
 pnpm --dir local test
-pnpm --dir local --filter @errandos/voice dev -- --hostname 0.0.0.0 --port 3100
+pnpm --dir local --filter @errandos/voice exec next dev --hostname 0.0.0.0 --port 3100
 ```
 
 The local implementation can be disconnected from USB after wireless ADB is
