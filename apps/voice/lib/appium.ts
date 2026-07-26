@@ -110,7 +110,12 @@ async function findClickableByExactLabels(
     'xpath',
     `//*[( ${conditions} )]/ancestor-or-self::*[@clickable="true"][1]`,
   );
-  return [...new Set(matches)];
+  const uniqueByBounds = new Map<string, string>();
+  for (const id of [...new Set(matches)]) {
+    const bounds = await elementAttribute(sessionId, id, 'bounds');
+    uniqueByBounds.set(bounds || id, id);
+  }
+  return [...uniqueByBounds.values()];
 }
 
 async function waitForElement(

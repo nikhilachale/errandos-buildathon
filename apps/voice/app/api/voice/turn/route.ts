@@ -63,6 +63,18 @@ const conversations =
   voiceGlobal.errandosVoiceConversations ?? new Map<string, ConversationState>();
 voiceGlobal.errandosVoiceConversations = conversations;
 const conversationTtlMs = 10 * 60 * 1000;
+const languageRequirements: Record<string, string> = {
+  'bn-IN': 'Bengali using Bengali script. Do not switch to Hindi or Hinglish.',
+  'gu-IN': 'Gujarati using Gujarati script. Do not switch to Hindi or Hinglish.',
+  'hi-IN': 'Hindi using Devanagari script, preserving natural English product or app names.',
+  'kn-IN': 'Kannada using Kannada script. Do not switch to Hindi or Hinglish.',
+  'ml-IN': 'Malayalam using Malayalam script. Do not switch to Hindi or Hinglish.',
+  'mr-IN': 'Marathi using Devanagari script. Do not switch to Hindi or Hinglish.',
+  'od-IN': 'Odia using Odia script. Do not switch to Hindi or Hinglish.',
+  'pa-IN': 'Punjabi using Gurmukhi script. Do not switch to Hindi or Hinglish.',
+  'ta-IN': 'Tamil using Tamil script. Do not switch to Hindi or Hinglish.',
+  'te-IN': 'Telugu using Telugu script. Do not switch to Hindi or Hinglish.',
+};
 
 const phoneTools = [
   {
@@ -299,9 +311,14 @@ export async function POST(request: Request): Promise<Response> {
       ? savedConversation
       : undefined;
 
+    const detectedLanguageRequirement = transcription.language_code
+      ? languageRequirements[transcription.language_code]
+      : undefined;
     const currentLanguageInstruction = transcription.language_code === 'en-IN'
       ? 'For this turn, the detected language is English. Reply only in English.'
-      : 'Follow the user’s detected Indian language or code-mixed speaking style for this turn.';
+      : detectedLanguageRequirement
+        ? `For this turn, reply only in ${detectedLanguageRequirement}`
+        : 'Follow the user’s detected Indian language or code-mixed speaking style for this turn.';
     const instructions = [
       'You are ErrandOS, a concise voice-first assistant operating the owner’s Android phone.',
       'The user may speak an Indian language, English, or a code-mixed combination.',
