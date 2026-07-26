@@ -1,4 +1,9 @@
 import { publishOverlayStatus } from './overlay';
+import {
+  buildCodCheckoutSnapshot,
+  hasCodEvidence,
+  isCodUnavailable,
+} from './cod';
 
 const APPIUM_URL = process.env.APPIUM_URL ?? 'http://127.0.0.1:4723';
 const DEVICE_UDID = process.env.ANDROID_DEVICE_UDID ?? '55221VDAQ000J1';
@@ -13,7 +18,14 @@ type AppiumElement = {
   ELEMENT?: string;
 };
 
-let blinkitSessionId: string | undefined;
+const appiumGlobal = globalThis as typeof globalThis & {
+  errandosBlinkitSessionId?: string;
+  errandosCodFinalAttempts?: Set<string>;
+};
+let blinkitSessionId = appiumGlobal.errandosBlinkitSessionId;
+const codFinalAttempts =
+  appiumGlobal.errandosCodFinalAttempts ?? new Set<string>();
+appiumGlobal.errandosCodFinalAttempts = codFinalAttempts;
 
 async function appiumRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${APPIUM_URL}${path}`, {
@@ -80,6 +92,25 @@ async function findElements(
   } catch {
     return [];
   }
+}
+
+async function pageSource(sessionId: string): Promise<string> {
+  return appiumRequest<string>(`/session/${sessionId}/source`);
+}
+
+async function findClickableByExactLabels(
+  sessionId: string,
+  labels: string[],
+): Promise<string[]> {
+  const conditions = labels
+    .flatMap((label) => [`@text="${label}"`, `@content-desc="${label}"`])
+    .join(' or ');
+  const matches = await findElements(
+    sessionId,
+    'xpath',
+    `//*[( ${conditions} )]/ancestor-or-self::*[@clickable="true"][1]`,
+  );
+  return [...new Set(matches)];
 }
 
 async function waitForElement(
@@ -235,6 +266,7 @@ async function createBlinkitSession(): Promise<string> {
   }
 
   blinkitSessionId = sessionId;
+  appiumGlobal.errandosBlinkitSessionId = sessionId;
   return sessionId;
 }
 
@@ -245,6 +277,7 @@ async function activeBlinkitSession(): Promise<string> {
     await activateBlinkitApp(sessionId);
   } catch {
     blinkitSessionId = undefined;
+    appiumGlobal.errandosBlinkitSessionId = undefined;
     return createBlinkitSession();
   }
 
@@ -456,5 +489,195 @@ export async function prepareGrocery(request: string, requestedSearchQuery?: str
     price,
     quantity,
     message: `Added ${product}${size ? ` ${size}` : ''} to the cart at ${price ?? 'the displayed price'}.`,
+  };
+}
+
+export async function prepareCodCheckout() {
+  await publishOverlayStatus('Opening your cart for COD review', 'checkout');
+  const sessionId = await activeBlinkitSession();
+  await new Promise((resolve) => setTimeout(resolve, 700));
+
+  let checkoutSource = '';
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const source = await pageSource(sessionId);
+    if (source.includes('package="com.android.systemui"')) {
+      return {
+        ok: false,
+        status: 'device_locked',
+        message: 'The phone is locked. Unlock it, then ask me to prepare the COD checkout again.',
+      };
+    }
+    if (
+      /place order|pay using|select payment option|delivering to/i.test(source)
+    ) {
+      checkoutSource = source;
+      break;
+    }
+
+    const cartTargets = await findClickableByExactLabels(
+      sessionId,
+      ['View cart', 'Go to cart'],
+    );
+    if (cartTargets.length > 1) {
+      throw new Error('Blinkit returned multiple cart controls.');
+    }
+    if (cartTargets.length === 1) {
+      await clickElement(sessionId, cartTargets[0]!);
+      await new Promise((resolve) => setTimeout(resolve, 1_200));
+      continue;
+    }
+
+    const activePackage = await currentAppPackage(sessionId);
+    if (activePackage !== BLINKIT_PACKAGE) await activateBlinkitApp(sessionId);
+    else await navigateBack(sessionId);
+    await new Promise((resolve) => setTimeout(resolve, 700));
+  }
+
+  if (!checkoutSource) {
+    return {
+      ok: false,
+      status: 'cart_unavailable',
+      message: 'I could not open a checkout-ready Blinkit cart.',
+    };
+  }
+  if (isCodUnavailable(checkoutSource)) {
+    return {
+      ok: false,
+      status: 'cod_unavailable',
+      message: 'Cash on Delivery is not available for this cart.',
+    };
+  }
+
+  const reviewSources = [checkoutSource];
+  if (!hasCodEvidence(checkoutSource)) {
+    const paymentTargets = await findClickableByExactLabels(
+      sessionId,
+      ['PAY USING', 'Select payment option'],
+    );
+    if (paymentTargets.length !== 1) {
+      return {
+        ok: false,
+        status: 'cod_unavailable',
+        message: 'I could not open a unique payment selector for this cart.',
+      };
+    }
+
+    await publishOverlayStatus('Checking Cash on Delivery availability', 'checkout');
+    await clickElement(sessionId, paymentTargets[0]!);
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    let paymentSource = await pageSource(sessionId);
+    reviewSources.push(paymentSource);
+    if (isCodUnavailable(paymentSource)) {
+      return {
+        ok: false,
+        status: 'cod_unavailable',
+        message: 'Cash on Delivery is not available for this cart.',
+      };
+    }
+
+    const codTargets = await findClickableByExactLabels(
+      sessionId,
+      ['Cash on Delivery', 'Pay On Delivery'],
+    );
+    if (codTargets.length !== 1) {
+      return {
+        ok: false,
+        status: 'cod_unavailable',
+        message: 'Blinkit did not show one selectable Cash on Delivery option.',
+      };
+    }
+
+    await clickElement(sessionId, codTargets[0]!);
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    paymentSource = await pageSource(sessionId);
+    reviewSources.push(paymentSource);
+  }
+
+  let snapshot = buildCodCheckoutSnapshot(reviewSources.join('\n'));
+  if (!snapshot) {
+    await navigateBack(sessionId).catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    reviewSources.push(await pageSource(sessionId));
+    snapshot = buildCodCheckoutSnapshot(reviewSources.join('\n'));
+  }
+  if (!snapshot) {
+    return {
+      ok: false,
+      status: 'checkout_unverified',
+      message: 'COD was visible, but I could not verify the cart total and saved address.',
+    };
+  }
+
+  await publishOverlayStatus('COD cart ready for your confirmation', 'confirmation');
+  return {
+    ok: false,
+    status: 'confirmation_required',
+    checkout: snapshot,
+    confirmationPhrase: 'Confirm COD order',
+    message: [
+      `COD checkout is ready for ₹${snapshot.total}`,
+      `to ${snapshot.addressLabel}.`,
+      'Say “Confirm COD order” to place it.',
+    ].join(' '),
+  };
+}
+
+export async function placeCodOrder(expectedFingerprint: string) {
+  const sessionId = await activeBlinkitSession();
+  const source = await pageSource(sessionId);
+  const snapshot = buildCodCheckoutSnapshot(source);
+  if (!snapshot || snapshot.fingerprint !== expectedFingerprint) {
+    return {
+      ok: false,
+      status: 'checkout_changed',
+      message: 'The checkout terms changed. I did not place the order; review it again.',
+    };
+  }
+  if (codFinalAttempts.has(expectedFingerprint)) {
+    return {
+      ok: false,
+      status: 'order_attempt_already_made',
+      message: 'A final order attempt was already made for these terms. Check Blinkit before retrying.',
+    };
+  }
+
+  const placeOrderTargets = await findClickableByExactLabels(
+    sessionId,
+    ['Place Order'],
+  );
+  if (placeOrderTargets.length !== 1) {
+    return {
+      ok: false,
+      status: 'final_action_unavailable',
+      message: 'I could not verify one final Place Order control, so I stopped.',
+    };
+  }
+
+  codFinalAttempts.add(expectedFingerprint);
+  await publishOverlayStatus('Placing the confirmed COD order', 'adding');
+  await clickElement(sessionId, placeOrderTargets[0]!);
+  await new Promise((resolve) => setTimeout(resolve, 3_000));
+  const confirmationSource = await pageSource(sessionId);
+  const providerReference =
+    /(?:order\s*(?:id|number|#)\s*[:#-]?\s*)([A-Za-z0-9-]{4,100})/i
+      .exec(confirmationSource)?.[1];
+  if (
+    /order is confirmed|track order/i.test(confirmationSource)
+      && providerReference
+  ) {
+    await publishOverlayStatus('COD order confirmed', 'success');
+    return {
+      ok: true,
+      status: 'ordered',
+      providerReference,
+      message: `The COD order is confirmed. Reference ${providerReference}.`,
+    };
+  }
+
+  await publishOverlayStatus('Check Blinkit for the final order status', 'error');
+  return {
+    ok: false,
+    status: 'order_status_ambiguous',
+    message: 'The final button was pressed once, but the provider reference was not verified. Check Blinkit before doing anything else.',
   };
 }

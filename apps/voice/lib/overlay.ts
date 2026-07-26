@@ -12,6 +12,8 @@ export type OverlayState =
   | 'working'
   | 'searching'
   | 'adding'
+  | 'checkout'
+  | 'confirmation'
   | 'success'
   | 'clarification'
   | 'error'

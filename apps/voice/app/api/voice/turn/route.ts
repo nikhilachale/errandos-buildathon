@@ -1,5 +1,9 @@
 import { NextResponse } from 'next/server';
 import { executePhoneAction, type PhoneActionArguments } from '../../../../lib/phone-tool';
+import {
+  isExplicitCodConfirmation,
+  type CodCheckoutSnapshot,
+} from '../../../../lib/cod';
 
 export const runtime = 'nodejs';
 
@@ -47,6 +51,7 @@ type PendingGrocery = {
 type ConversationState = {
   responseId: string;
   languageCode: string;
+  pendingCod?: CodCheckoutSnapshot;
   pendingGrocery?: PendingGrocery;
   updatedAt: number;
 };
@@ -88,6 +93,38 @@ const phoneTools = [
   },
   {
     type: 'function',
+    name: 'prepare_cod_checkout',
+    description: [
+      'Open and review the existing Blinkit cart, select Cash on Delivery when available, and return the verified total and saved address label.',
+      'This never presses the final Place Order button.',
+      'Use when the user asks to prepare, review, checkout, or order the cart using COD.',
+    ].join(' '),
+    strict: true,
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    type: 'function',
+    name: 'confirm_cod_order',
+    description: [
+      'Press the final Blinkit Place Order button exactly once for previously reviewed, unchanged COD terms.',
+      'Use only after a COD review when the user’s current speech explicitly says “Confirm COD order”.',
+      'Never use for “yes”, “go ahead”, “add to cart”, or an initial checkout request.',
+    ].join(' '),
+    strict: true,
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    type: 'function',
     name: 'open_blinkit',
     description: [
       'Open Blinkit without searching or adding anything.',
@@ -119,12 +156,22 @@ function phoneActionForCall(
   callName: string,
   arguments_: PhoneActionArguments,
   pendingGrocery?: PendingGrocery,
+  pendingCod?: CodCheckoutSnapshot,
 ): PhoneActionArguments {
   if (callName === 'prepare_grocery') {
     return {
       action: 'prepare_grocery',
       request: arguments_.request,
       ...(pendingGrocery ? { searchQuery: pendingGrocery.request } : {}),
+    };
+  }
+  if (callName === 'prepare_cod_checkout') {
+    return { action: 'prepare_cod_checkout' };
+  }
+  if (callName === 'confirm_cod_order') {
+    return {
+      action: 'confirm_cod_order',
+      expectedFingerprint: pendingCod?.fingerprint,
     };
   }
   if (callName === 'open_blinkit') return { action: 'open_blinkit' };
@@ -270,7 +317,12 @@ export async function POST(request: Request): Promise<Response> {
       'Resolve a matching follow-up to the full exact visible product and size before calling prepare_grocery.',
       'If multiple pending options remain and the user only says add to cart, ask which option; never choose one yourself.',
       'Use open_blinkit only for a bare request to open the app.',
+      'Use prepare_cod_checkout to review an existing cart for Cash on Delivery; it never places the order.',
+      'After a COD review, read the total and saved address label and require the user to say the exact phrase “Confirm COD order”.',
+      'Use confirm_cod_order only when that exact phrase is present in the user’s current speech.',
+      'Never treat yes, okay, go ahead, or add to cart as final purchase authorization.',
       'When a tool returns needs_clarification, say one short spoken question and mention the exact visible product or size options.',
+      'When a tool returns confirmation_required, clearly speak the total, saved address label, and required confirmation phrase.',
       'When a tool returns not_found, ask the user to repeat or use another product name.',
       'Never imply an item was added when a tool asks for clarification.',
       'When a tool confirms added or already_in_cart, speak that exact result.',
@@ -289,6 +341,14 @@ export async function POST(request: Request): Promise<Response> {
           'Use only these visible options. If the answer uniquely identifies one, call prepare_grocery with its full exact product name and size.',
           'If the answer does not uniquely identify one, ask a short follow-up and do not add anything.',
         ].join('\n')
+      : conversation?.pendingCod
+        ? [
+            'A reviewed COD checkout is pending explicit confirmation.',
+            `Reviewed terms: ${JSON.stringify(conversation.pendingCod)}`,
+            `New spoken answer: ${transcript}`,
+            'Only call confirm_cod_order if the new spoken answer contains the exact phrase “Confirm COD order”.',
+            'Otherwise remind the user of that phrase and do not perform the final action.',
+          ].join('\n')
       : transcript;
 
     let aiResponse = await createOpenAIResponse(openAIApiKey, {
@@ -320,8 +380,20 @@ export async function POST(request: Request): Promise<Response> {
           call.name,
           arguments_,
           conversation?.pendingGrocery,
+          conversation?.pendingCod,
         );
-        const result = await executePhoneAction(phoneAction);
+        const result =
+          call.name === 'confirm_cod_order'
+            && (
+              !conversation?.pendingCod
+                || !isExplicitCodConfirmation(transcript)
+            )
+            ? {
+                ok: false,
+                status: 'confirmation_required',
+                message: 'The final order is locked. Say “Confirm COD order” after reviewing the total and address.',
+              }
+            : await executePhoneAction(phoneAction);
         toolEvents.push(phoneAction.action ?? call.name);
         toolResults.push(result);
         toolOutputs.push({
@@ -349,6 +421,7 @@ export async function POST(request: Request): Promise<Response> {
       ? conversation.languageCode
       : detectedLanguage;
     const firstToolResult = toolResults[0] as {
+      checkout?: CodCheckoutSnapshot;
       options?: GroceryOption[];
       request?: string;
       status?: string;
@@ -369,23 +442,52 @@ export async function POST(request: Request): Promise<Response> {
     ) {
       pendingGrocery = undefined;
     }
+    let pendingCod = conversation?.pendingCod;
+    if (
+      firstToolResult?.status === 'confirmation_required'
+        && firstToolResult.checkout?.fingerprint
+    ) {
+      pendingCod = firstToolResult.checkout;
+    } else if (
+      firstToolResult
+        && [
+          'checkout_changed',
+          'ordered',
+          'order_attempt_already_made',
+          'order_status_ambiguous',
+        ].includes(firstToolResult.status ?? '')
+    ) {
+      pendingCod = undefined;
+    }
 
     if (aiResponse.id) {
       conversations.set(clientId, {
         responseId: aiResponse.id,
         languageCode: responseLanguage,
+        ...(pendingCod ? { pendingCod } : {}),
         ...(pendingGrocery ? { pendingGrocery } : {}),
         updatedAt: Date.now(),
       });
     }
 
-    const assistantState = ['needs_clarification', 'not_found'].includes(
+    const assistantState = [
+      'needs_clarification',
+      'not_found',
+      'confirmation_required',
+      'device_locked',
+    ].includes(
       firstToolResult?.status ?? '',
     )
       ? 'clarification'
-      : ['added', 'already_in_cart'].includes(firstToolResult?.status ?? '')
+      : ['added', 'already_in_cart', 'ordered'].includes(firstToolResult?.status ?? '')
         ? 'success'
-        : 'ready';
+        : [
+            'checkout_changed',
+            'order_attempt_already_made',
+            'order_status_ambiguous',
+          ].includes(firstToolResult?.status ?? '')
+          ? 'error'
+          : 'ready';
     const voice = await synthesizeSpeech(sarvamApiKey, reply, responseLanguage);
 
     return NextResponse.json({

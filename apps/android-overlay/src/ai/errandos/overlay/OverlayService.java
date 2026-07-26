@@ -377,6 +377,7 @@ public final class OverlayService extends Service {
             "working".equals(state)
                 || "searching".equals(state)
                 || "adding".equals(state)
+                || "checkout".equals(state)
         ) {
             statusView.animate()
                 .rotationBy(360f)
@@ -392,6 +393,8 @@ public final class OverlayService extends Service {
         if ("listening".equals(state)) return android.R.drawable.ic_media_pause;
         if ("searching".equals(state)) return android.R.drawable.ic_menu_search;
         if ("adding".equals(state)) return android.R.drawable.ic_input_add;
+        if ("checkout".equals(state)) return android.R.drawable.ic_menu_agenda;
+        if ("confirmation".equals(state)) return android.R.drawable.ic_lock_lock;
         if ("success".equals(state)) return android.R.drawable.checkbox_on_background;
         if ("clarification".equals(state)) return android.R.drawable.ic_dialog_info;
         if ("error".equals(state)) return android.R.drawable.ic_dialog_alert;
@@ -448,6 +451,8 @@ public final class OverlayService extends Service {
         else if ("listening".equals(state)) color = Color.rgb(188, 45, 58);
         else if ("searching".equals(state)) color = Color.rgb(26, 96, 113);
         else if ("adding".equals(state)) color = Color.rgb(92, 55, 132);
+        else if ("checkout".equals(state)) color = Color.rgb(45, 74, 122);
+        else if ("confirmation".equals(state)) color = Color.rgb(142, 91, 20);
         else if ("working".equals(state)) color = Color.rgb(42, 62, 99);
         else color = Color.rgb(28, 31, 25);
 
