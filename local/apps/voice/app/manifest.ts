@@ -5,9 +5,9 @@ export default function manifest(): MetadataRoute.Manifest {
     background_color: '#10130f',
     description: 'A voice-first command surface for safe real-world errands.',
     display: 'standalone',
-    name: 'ErrandOS',
+    name: 'JaldiAI',
     orientation: 'portrait',
-    short_name: 'ErrandOS',
+    short_name: 'JaldiAI',
     start_url: '/',
     theme_color: '#10130f',
   };

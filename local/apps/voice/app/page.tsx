@@ -27,7 +27,7 @@ const stateCopy: Record<VoiceState, { eyebrow: string; title: string }> = {
   error: { eyebrow: 'VOICE PAUSED', title: 'Tap to try again' },
   idle: { eyebrow: 'READY WHEN YOU ARE', title: 'What needs doing?' },
   listening: { eyebrow: 'SARVAM IS LISTENING', title: 'Go ahead' },
-  speaking: { eyebrow: 'ERRANDOS', title: 'Done' },
+  speaking: { eyebrow: 'JALDIAI', title: 'Done' },
   thinking: { eyebrow: 'UNDERSTANDING', title: 'Making a safe plan' },
 };
 
@@ -213,7 +213,7 @@ export default function VoiceHome() {
       <header className="masthead">
         <div className="wordmark">
           <span className="wordmark-mark" aria-hidden="true">E</span>
-          <span>ErrandOS</span>
+          <span>JaldiAI</span>
         </div>
         <div className={`connection-pill ${isLive ? 'is-live' : ''}`}>
           <span className="connection-dot" />

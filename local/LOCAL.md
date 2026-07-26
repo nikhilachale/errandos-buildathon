@@ -1,6 +1,6 @@
-# Local ErrandOS
+# Local JaldiAI
 
-This directory is the phone-first ErrandOS implementation used for the
+This directory is the phone-first JaldiAI implementation used for the
 buildathon demo.
 
 ## Interaction
@@ -22,7 +22,7 @@ choice remains.
 
 The current demo uses:
 
-- an Android phone with the ErrandOS overlay installed;
+- an Android phone with the JaldiAI overlay installed;
 - wireless ADB between the phone and Mac;
 - Appium on the Mac;
 - the Next.js voice server in `apps/voice`;

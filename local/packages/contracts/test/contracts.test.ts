@@ -8,7 +8,7 @@ import {
 
 const inr = (amountMinor: number) => ({ amountMinor, currency: 'INR' as const });
 
-describe('ErrandOS contracts', () => {
+describe('JaldiAI contracts', () => {
   it('accepts a product offer with an opaque provider identifier', () => {
     const offer = ProductOfferSchema.parse({
       available: true,
