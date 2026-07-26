@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1040 320" role="img" aria-labelledby="title desc">
-  <title id="title">Errands</title>
-  <desc id="desc">Errands wordmark with a voice waveform, microphone, and approval check.</desc>
+  <title id="title">JaldiAI</title>
+  <desc id="desc">JaldiAI wordmark with a voice waveform, microphone, and approval check.</desc>
   <g transform="translate(18 24) scale(.53)" fill="none" stroke-linecap="round" stroke-linejoin="round">
     <path
       d="M40 246h30c14 0 14-52 29-52s15 104 30 104 15-70 30-70 15 38 30 38"
@@ -33,5 +33,5 @@
     font-size="164"
     font-weight="400"
     letter-spacing="-6"
-  >Errands</text>
+  >JaldiAI</text>
 </svg>
