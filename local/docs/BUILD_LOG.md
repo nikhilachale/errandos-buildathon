@@ -26,3 +26,24 @@ This log records what was genuinely designed, implemented, and verified in the b
 4. Expose the first narrow ErrandOS tools.
 5. Build the request, proposal-review, and status interface.
 6. Add an end-to-end demo and verification evidence.
+
+### Local phone agent
+
+- Added a circular Android overlay with press-and-hold voice capture.
+- Connected Sarvam STT and TTS so instructions, follow-up questions, progress,
+  and results can remain in the user's Indian language.
+- Added an OpenAI-backed tool-planning layer with narrow Appium phone actions.
+- Added contextual follow-up handling so a spoken product choice or
+  “add to cart” continues the pending task.
+- Added exact product matching and spoken clarification for ambiguous requests.
+- Added guarded COD checkout review with explicit confirmation, provider-state
+  fingerprinting, and at-most-once final action protection.
+- Verified the speech pipeline across Hindi, Tamil, Marathi, Bengali, Gujarati,
+  Kannada, Malayalam, Punjabi, Telugu, and Odia.
+
+### Repository layout
+
+- Added the Hermes/server implementation as the first-class `hosted` workspace.
+- Kept the phone/Appium/Sarvam implementation as the first-class `local`
+  workspace.
+- Preserved local env files while committing only safe env templates.
