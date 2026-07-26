@@ -46,7 +46,7 @@ public final class OverlayService extends Service {
     private static final String CHANNEL_ID = "errandos_overlay";
     private static final int NOTIFICATION_ID = 73;
     private static final String VOICE_TURN_URL =
-        "http://192.168.241.177:3100/api/voice/turn";
+        "http://127.0.0.1:3100/api/voice/turn";
 
     private final ExecutorService networkExecutor = Executors.newSingleThreadExecutor();
     private WindowManager windowManager;
