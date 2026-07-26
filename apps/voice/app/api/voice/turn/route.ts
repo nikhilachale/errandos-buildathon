@@ -42,27 +42,73 @@ type ConversationState = {
 const conversations = new Map<string, ConversationState>();
 const conversationTtlMs = 10 * 60 * 1000;
 
-const phoneTool = {
-  type: 'function',
-  name: 'operate_phone',
-  description: 'Run one narrow, owner-requested action on the connected Android phone.',
-  strict: true,
-  parameters: {
-    type: 'object',
-    additionalProperties: false,
-    properties: {
-      action: {
-        type: 'string',
-        enum: ['phone_status', 'open_blinkit', 'prepare_grocery'],
+const phoneTools = [
+  {
+    type: 'function',
+    name: 'prepare_grocery',
+    description: [
+      'Search Blinkit and safely prepare a requested grocery item.',
+      'Use this whenever the user asks to add, buy, find, search, or get a grocery product.',
+      'This action searches the product and either adds one unambiguous exact match or returns visible options for clarification.',
+      'Do not use open_blinkit for a grocery request.',
+    ].join(' '),
+    strict: true,
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        request: {
+          type: 'string',
+          description: [
+            'The exact product words spoken by the user.',
+            'Preserve brand, flavor, quantity, and size exactly when provided.',
+            'Never invent a variant or size that the user did not say.',
+          ].join(' '),
+        },
       },
-      request: {
-        type: ['string', 'null'],
-        description: 'Only the grocery product search phrase, or null when it is not needed.',
-      },
+      required: ['request'],
     },
-    required: ['action', 'request'],
   },
-};
+  {
+    type: 'function',
+    name: 'open_blinkit',
+    description: [
+      'Open Blinkit without searching or adding anything.',
+      'Use only when the user explicitly asks to open or launch Blinkit and does not request a product.',
+    ].join(' '),
+    strict: true,
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    type: 'function',
+    name: 'phone_status',
+    description: 'Check whether the connected Android phone and Appium are reachable.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+      required: [],
+    },
+  },
+];
+
+function phoneActionForCall(
+  callName: string,
+  arguments_: PhoneActionArguments,
+): PhoneActionArguments {
+  if (callName === 'prepare_grocery') {
+    return { action: 'prepare_grocery', request: arguments_.request };
+  }
+  if (callName === 'open_blinkit') return { action: 'open_blinkit' };
+  if (callName === 'phone_status') return { action: 'phone_status' };
+  return {};
+}
 
 function extractText(response: OpenAIResponse): string {
   if (response.output_text?.trim()) return response.output_text.trim();
@@ -188,10 +234,16 @@ export async function POST(request: Request): Promise<Response> {
       'You are ErrandOS, a concise voice-first assistant operating the owner’s Android phone.',
       'The user may speak an Indian language, English, or a code-mixed combination.',
       'Always reply in the same spoken language, script style, and code-mix as the user.',
+      'If the transcript is entirely English, reply only in English.',
+      'Use Hinglish only when the user mixes Hindi and English.',
       'For Hinglish input, reply in natural Hinglish rather than formal Hindi or English.',
       'Keep the spoken response under three short sentences.',
-      'Use operate_phone for phone status, opening Blinkit, or preparing a grocery request.',
+      'For every request to add, buy, find, search, or get a grocery item, call prepare_grocery immediately.',
+      'Never call only open_blinkit when the user also names or requests a grocery item.',
+      'Pass the user’s exact product phrase to prepare_grocery; do not invent or silently choose a brand, flavor, pack, or size.',
+      'Use open_blinkit only for a bare request to open the app.',
       'When a tool returns needs_clarification, say one short spoken question and mention the exact visible product or size options.',
+      'When a tool returns not_found, ask the user to repeat or use another product name.',
       'Never imply an item was added when a tool asks for clarification.',
       'When a tool confirms added or already_in_cart, speak that exact result.',
       'Opening an app and read-only checks are safe.',
@@ -203,7 +255,7 @@ export async function POST(request: Request): Promise<Response> {
       model: 'gpt-4.1-mini',
       instructions,
       input: transcript,
-      tools: [phoneTool],
+      tools: phoneTools,
       tool_choice: 'auto',
       ...(conversation ? { previous_response_id: conversation.responseId } : {}),
     });
@@ -215,7 +267,7 @@ export async function POST(request: Request): Promise<Response> {
     if (toolCalls.length > 0 && aiResponse.id) {
       const toolOutputs = [];
       for (const call of toolCalls) {
-        if (!call.call_id || call.name !== 'operate_phone') continue;
+        if (!call.call_id || !call.name) continue;
 
         let arguments_: PhoneActionArguments = {};
         try {
@@ -224,8 +276,9 @@ export async function POST(request: Request): Promise<Response> {
           arguments_ = {};
         }
 
-        const result = await executePhoneAction(arguments_);
-        toolEvents.push(arguments_.action ?? 'phone_action');
+        const phoneAction = phoneActionForCall(call.name, arguments_);
+        const result = await executePhoneAction(phoneAction);
+        toolEvents.push(phoneAction.action ?? call.name);
         toolResults.push(result);
         toolOutputs.push({
           type: 'function_call_output',
@@ -240,7 +293,7 @@ export async function POST(request: Request): Promise<Response> {
           instructions,
           previous_response_id: aiResponse.id,
           input: toolOutputs,
-          tools: [phoneTool],
+          tools: phoneTools,
         });
       }
     }
@@ -260,7 +313,9 @@ export async function POST(request: Request): Promise<Response> {
     }
 
     const firstToolResult = toolResults[0] as { status?: string } | undefined;
-    const assistantState = firstToolResult?.status === 'needs_clarification'
+    const assistantState = ['needs_clarification', 'not_found'].includes(
+      firstToolResult?.status ?? '',
+    )
       ? 'clarification'
       : ['added', 'already_in_cart'].includes(firstToolResult?.status ?? '')
         ? 'success'

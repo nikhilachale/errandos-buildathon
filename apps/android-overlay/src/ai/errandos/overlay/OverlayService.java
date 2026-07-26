@@ -24,7 +24,8 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
-import android.widget.TextView;
+import android.view.animation.AccelerateDecelerateInterpolator;
+import android.widget.ImageButton;
 import android.util.Base64;
 
 import org.json.JSONObject;
@@ -51,7 +52,7 @@ public final class OverlayService extends Service {
     private final ExecutorService networkExecutor = Executors.newSingleThreadExecutor();
     private WindowManager windowManager;
     private WindowManager.LayoutParams layoutParams;
-    private TextView statusView;
+    private ImageButton statusView;
     private BroadcastReceiver receiver;
     private MediaRecorder recorder;
     private MediaPlayer player;
@@ -133,27 +134,27 @@ public final class OverlayService extends Service {
 
     private void createOverlay() {
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
-        statusView = new TextView(this);
-        statusView.setText("●  Tap to speak");
-        statusView.setTextColor(Color.WHITE);
-        statusView.setTextSize(15);
-        statusView.setGravity(Gravity.CENTER_VERTICAL);
-        statusView.setMaxLines(3);
-        statusView.setPadding(dp(18), dp(12), dp(18), dp(12));
+        statusView = new ImageButton(this);
+        statusView.setImageResource(android.R.drawable.ic_btn_speak_now);
+        statusView.setColorFilter(Color.WHITE);
+        statusView.setContentDescription("ErrandOS. Tap to speak.");
+        statusView.setPadding(dp(17), dp(17), dp(17), dp(17));
+        statusView.setScaleType(ImageButton.ScaleType.FIT_CENTER);
         statusView.setBackground(backgroundFor("ready"));
         statusView.setElevation(dp(10));
 
         layoutParams = new WindowManager.LayoutParams(
-            Math.min(getResources().getDisplayMetrics().widthPixels - dp(32), dp(380)),
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            dp(64),
+            dp(64),
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                 | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                 | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         );
-        layoutParams.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
-        layoutParams.y = dp(64);
+        layoutParams.gravity = Gravity.TOP | Gravity.START;
+        layoutParams.x = getResources().getDisplayMetrics().widthPixels - dp(80);
+        layoutParams.y = dp(76);
 
         installTouchBehavior();
         windowManager.addView(statusView, layoutParams);
@@ -229,7 +230,7 @@ public final class OverlayService extends Service {
             recorder.prepare();
             recorder.start();
             recording = true;
-            setStatus("Listening… Tap again when finished.", "working");
+            setStatus("Listening. Tap again when finished.", "listening");
         } catch (Exception error) {
             releaseRecorder();
             setStatus("I couldn't start the microphone.", "error");
@@ -367,8 +368,35 @@ public final class OverlayService extends Service {
     }
 
     private void setStatus(String message, String state) {
-        statusView.setText("●  " + message);
+        statusView.setContentDescription("ErrandOS. " + message);
+        if (Build.VERSION.SDK_INT >= 26) statusView.setTooltipText(message);
+        statusView.setImageResource(iconFor(state));
         statusView.setBackground(backgroundFor(state));
+        statusView.animate().cancel();
+        if (
+            "working".equals(state)
+                || "searching".equals(state)
+                || "adding".equals(state)
+        ) {
+            statusView.animate()
+                .rotationBy(360f)
+                .setDuration(650)
+                .setInterpolator(new AccelerateDecelerateInterpolator())
+                .start();
+        } else {
+            statusView.setRotation(0f);
+        }
+    }
+
+    private int iconFor(String state) {
+        if ("listening".equals(state)) return android.R.drawable.ic_media_pause;
+        if ("searching".equals(state)) return android.R.drawable.ic_menu_search;
+        if ("adding".equals(state)) return android.R.drawable.ic_input_add;
+        if ("success".equals(state)) return android.R.drawable.checkbox_on_background;
+        if ("clarification".equals(state)) return android.R.drawable.ic_dialog_info;
+        if ("error".equals(state)) return android.R.drawable.ic_dialog_alert;
+        if ("working".equals(state)) return android.R.drawable.ic_popup_sync;
+        return android.R.drawable.ic_btn_speak_now;
     }
 
     private void releaseRecorder() {
@@ -417,12 +445,15 @@ public final class OverlayService extends Service {
         if ("success".equals(state)) color = Color.rgb(35, 84, 55);
         else if ("clarification".equals(state)) color = Color.rgb(117, 75, 22);
         else if ("error".equals(state)) color = Color.rgb(118, 42, 42);
+        else if ("listening".equals(state)) color = Color.rgb(188, 45, 58);
+        else if ("searching".equals(state)) color = Color.rgb(26, 96, 113);
+        else if ("adding".equals(state)) color = Color.rgb(92, 55, 132);
         else if ("working".equals(state)) color = Color.rgb(42, 62, 99);
         else color = Color.rgb(28, 31, 25);
 
         GradientDrawable background = new GradientDrawable();
         background.setColor(color);
-        background.setCornerRadius(dp(24));
+        background.setShape(GradientDrawable.OVAL);
         background.setStroke(dp(1), Color.argb(90, 220, 255, 116));
         return background;
     }

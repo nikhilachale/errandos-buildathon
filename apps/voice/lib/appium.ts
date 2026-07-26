@@ -117,6 +117,13 @@ async function typeIntoElement(sessionId: string, id: string, text: string): Pro
   });
 }
 
+async function navigateBack(sessionId: string): Promise<void> {
+  await appiumRequest(`/session/${sessionId}/back`, {
+    body: '{}',
+    method: 'POST',
+  });
+}
+
 async function elementAttribute(
   sessionId: string,
   id: string,
@@ -137,6 +144,7 @@ function productTokens(value: string): string[] {
 
   return value
     .toLocaleLowerCase('en-IN')
+    .replace(/\blay['’]?s\b|\blayers\b/g, 'lays')
     .replace(/\bdoodh\b|\bdudh\b/g, 'milk')
     .replace(/\btaza\b|\btazaa\b/g, 'taaza')
     .replace(/\blitres?\b|\bliters?\b/g, 'l')
@@ -144,6 +152,12 @@ function productTokens(value: string): string[] {
     .trim()
     .split(/\s+/)
     .filter((token) => token && !stopWords.has(token));
+}
+
+function searchQueryFor(request: string): string {
+  return request
+    .replace(/\blayers\b/gi, 'Lays')
+    .replace(/\blay['’]?s\b/gi, 'Lays');
 }
 
 function matchesRequestedProduct(request: string, product: string, size?: string): boolean {
@@ -226,33 +240,45 @@ export async function openBlinkit() {
 export async function prepareGrocery(request: string) {
   const query = request.trim();
   if (!query) throw new Error('A grocery product is required.');
+  const searchQuery = searchQueryFor(query);
 
-  await publishOverlayStatus(`Searching Blinkit for ${query}…`, 'working');
+  await publishOverlayStatus(`Searching for ${searchQuery}`, 'searching');
   const sessionId = await activeBlinkitSession();
-  let searchInput = await findElement(
-    sessionId,
-    'id',
-    `${BLINKIT_PACKAGE}:id/edittext`,
-  );
-
-  if (!searchInput) {
-    const searchBar = await waitForElement(
-      sessionId,
-      'id',
-      `${BLINKIT_PACKAGE}:id/z_search_bar`,
-    );
-    if (!searchBar) throw new Error('Blinkit search is not available.');
-    await clickElement(sessionId, searchBar);
-    searchInput = await waitForElement(
+  let searchInput: string | undefined;
+  for (let screenAttempt = 0; screenAttempt < 5 && !searchInput; screenAttempt += 1) {
+    searchInput = await findElement(
       sessionId,
       'id',
       `${BLINKIT_PACKAGE}:id/edittext`,
     );
+
+    if (!searchInput) {
+      const searchBar = await findElement(
+        sessionId,
+        'id',
+        `${BLINKIT_PACKAGE}:id/z_search_bar`,
+      );
+      if (searchBar) {
+        await clickElement(sessionId, searchBar);
+        searchInput = await waitForElement(
+          sessionId,
+          'id',
+          `${BLINKIT_PACKAGE}:id/edittext`,
+        );
+      }
+    }
+
+    if (!searchInput && screenAttempt < 4) {
+      await publishOverlayStatus('Returning to Blinkit search', 'working');
+      await navigateBack(sessionId);
+      await new Promise((resolve) => setTimeout(resolve, 700));
+    }
   }
 
-  if (!searchInput) throw new Error('Blinkit search input did not open.');
+  if (!searchInput) throw new Error('Blinkit search is not available after returning to Home.');
   await clearElement(sessionId, searchInput);
-  await typeIntoElement(sessionId, searchInput, query);
+  await typeIntoElement(sessionId, searchInput, searchQuery);
+  await publishOverlayStatus('Checking the options on screen', 'working');
 
   let productCards: string[] = [];
   for (let attempt = 0; attempt < 10 && productCards.length === 0; attempt += 1) {
@@ -267,7 +293,7 @@ export async function prepareGrocery(request: string) {
   }
 
   if (productCards.length === 0) {
-    await publishOverlayStatus(`I couldn't find ${query}. Tap to try another name.`, 'clarification');
+    await publishOverlayStatus(`I couldn't find ${searchQuery}`, 'clarification');
     return {
       ok: false,
       status: 'not_found',
@@ -364,7 +390,9 @@ export async function prepareGrocery(request: string) {
     productCard,
   );
   if (!addButton) throw new Error(`The ADD control for ${product} is not available.`);
+  await publishOverlayStatus(`Adding ${product}`, 'adding');
   await clickElement(sessionId, addButton);
+  await publishOverlayStatus('Confirming the cart', 'working');
 
   const quantityElement = await waitForElement(
     sessionId,

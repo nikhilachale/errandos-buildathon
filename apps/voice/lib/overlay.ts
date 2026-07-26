@@ -8,7 +8,14 @@ const DEVICE_UDID = process.env.ANDROID_DEVICE_UDID ?? '55221VDAQ000J1';
 const OVERLAY_PACKAGE = 'ai.errandos.overlay';
 const OVERLAY_ACTION = 'ai.errandos.overlay.STATUS';
 
-export type OverlayState = 'working' | 'success' | 'clarification' | 'error' | 'ready';
+export type OverlayState =
+  | 'working'
+  | 'searching'
+  | 'adding'
+  | 'success'
+  | 'clarification'
+  | 'error'
+  | 'ready';
 
 export async function publishOverlayStatus(
   message: string,
