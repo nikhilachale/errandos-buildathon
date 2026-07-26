@@ -33,13 +33,30 @@ type SarvamTranscript = {
   };
 };
 
+type GroceryOption = {
+  product?: string;
+  price?: string;
+  size?: string;
+};
+
+type PendingGrocery = {
+  options: GroceryOption[];
+  request: string;
+};
+
 type ConversationState = {
   responseId: string;
   languageCode: string;
+  pendingGrocery?: PendingGrocery;
   updatedAt: number;
 };
 
-const conversations = new Map<string, ConversationState>();
+const voiceGlobal = globalThis as typeof globalThis & {
+  errandosVoiceConversations?: Map<string, ConversationState>;
+};
+const conversations =
+  voiceGlobal.errandosVoiceConversations ?? new Map<string, ConversationState>();
+voiceGlobal.errandosVoiceConversations = conversations;
 const conversationTtlMs = 10 * 60 * 1000;
 
 const phoneTools = [
@@ -101,9 +118,14 @@ const phoneTools = [
 function phoneActionForCall(
   callName: string,
   arguments_: PhoneActionArguments,
+  pendingGrocery?: PendingGrocery,
 ): PhoneActionArguments {
   if (callName === 'prepare_grocery') {
-    return { action: 'prepare_grocery', request: arguments_.request };
+    return {
+      action: 'prepare_grocery',
+      request: arguments_.request,
+      ...(pendingGrocery ? { searchQuery: pendingGrocery.request } : {}),
+    };
   }
   if (callName === 'open_blinkit') return { action: 'open_blinkit' };
   if (callName === 'phone_status') return { action: 'phone_status' };
@@ -230,6 +252,9 @@ export async function POST(request: Request): Promise<Response> {
       ? savedConversation
       : undefined;
 
+    const currentLanguageInstruction = transcription.language_code === 'en-IN'
+      ? 'For this turn, the detected language is English. Reply only in English.'
+      : 'Follow the user’s detected Indian language or code-mixed speaking style for this turn.';
     const instructions = [
       'You are ErrandOS, a concise voice-first assistant operating the owner’s Android phone.',
       'The user may speak an Indian language, English, or a code-mixed combination.',
@@ -241,6 +266,9 @@ export async function POST(request: Request): Promise<Response> {
       'For every request to add, buy, find, search, or get a grocery item, call prepare_grocery immediately.',
       'Never call only open_blinkit when the user also names or requests a grocery item.',
       'Pass the user’s exact product phrase to prepare_grocery; do not invent or silently choose a brand, flavor, pack, or size.',
+      'When structured pending grocery options are provided, treat the new speech as the answer to that prior question.',
+      'Resolve a matching follow-up to the full exact visible product and size before calling prepare_grocery.',
+      'If multiple pending options remain and the user only says add to cart, ask which option; never choose one yourself.',
       'Use open_blinkit only for a bare request to open the app.',
       'When a tool returns needs_clarification, say one short spoken question and mention the exact visible product or size options.',
       'When a tool returns not_found, ask the user to repeat or use another product name.',
@@ -249,12 +277,24 @@ export async function POST(request: Request): Promise<Response> {
       'Opening an app and read-only checks are safe.',
       'Never claim an order was placed unless a tool returns a verified provider reference.',
       'Before any purchase, say that explicit review is required.',
+      currentLanguageInstruction,
     ].join(' ');
+
+    const modelInput = conversation?.pendingGrocery
+      ? [
+          'The user is answering a pending grocery clarification.',
+          `Original request: ${conversation.pendingGrocery.request}`,
+          `Visible options: ${JSON.stringify(conversation.pendingGrocery.options)}`,
+          `New spoken answer: ${transcript}`,
+          'Use only these visible options. If the answer uniquely identifies one, call prepare_grocery with its full exact product name and size.',
+          'If the answer does not uniquely identify one, ask a short follow-up and do not add anything.',
+        ].join('\n')
+      : transcript;
 
     let aiResponse = await createOpenAIResponse(openAIApiKey, {
       model: 'gpt-4.1-mini',
       instructions,
-      input: transcript,
+      input: modelInput,
       tools: phoneTools,
       tool_choice: 'auto',
       ...(conversation ? { previous_response_id: conversation.responseId } : {}),
@@ -276,7 +316,11 @@ export async function POST(request: Request): Promise<Response> {
           arguments_ = {};
         }
 
-        const phoneAction = phoneActionForCall(call.name, arguments_);
+        const phoneAction = phoneActionForCall(
+          call.name,
+          arguments_,
+          conversation?.pendingGrocery,
+        );
         const result = await executePhoneAction(phoneAction);
         toolEvents.push(phoneAction.action ?? call.name);
         toolResults.push(result);
@@ -304,15 +348,37 @@ export async function POST(request: Request): Promise<Response> {
     const responseLanguage = isShortFollowUp && conversation
       ? conversation.languageCode
       : detectedLanguage;
+    const firstToolResult = toolResults[0] as {
+      options?: GroceryOption[];
+      request?: string;
+      status?: string;
+    } | undefined;
+    let pendingGrocery = conversation?.pendingGrocery;
+    if (
+      firstToolResult?.status === 'needs_clarification'
+        && firstToolResult.request
+        && firstToolResult.options?.length
+    ) {
+      pendingGrocery = {
+        options: firstToolResult.options,
+        request: firstToolResult.request,
+      };
+    } else if (
+      firstToolResult
+        && firstToolResult.status !== 'needs_clarification'
+    ) {
+      pendingGrocery = undefined;
+    }
+
     if (aiResponse.id) {
       conversations.set(clientId, {
         responseId: aiResponse.id,
         languageCode: responseLanguage,
+        ...(pendingGrocery ? { pendingGrocery } : {}),
         updatedAt: Date.now(),
       });
     }
 
-    const firstToolResult = toolResults[0] as { status?: string } | undefined;
     const assistantState = ['needs_clarification', 'not_found'].includes(
       firstToolResult?.status ?? '',
     )

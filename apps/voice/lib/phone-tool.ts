@@ -3,6 +3,7 @@ import { openBlinkit, prepareGrocery, readPhoneStatus } from './appium';
 export type PhoneActionArguments = {
   action?: 'phone_status' | 'open_blinkit' | 'prepare_grocery';
   request?: string;
+  searchQuery?: string;
 };
 
 export async function executePhoneAction(arguments_: PhoneActionArguments) {
@@ -12,7 +13,7 @@ export async function executePhoneAction(arguments_: PhoneActionArguments) {
     case 'open_blinkit':
       return { ok: true, result: await openBlinkit() };
     case 'prepare_grocery':
-      return prepareGrocery(arguments_.request ?? '');
+      return prepareGrocery(arguments_.request ?? '', arguments_.searchQuery);
     default:
       return {
         ok: false,

@@ -124,6 +124,26 @@ async function navigateBack(sessionId: string): Promise<void> {
   });
 }
 
+async function currentAppPackage(sessionId: string): Promise<string | undefined> {
+  try {
+    return await appiumRequest<string>(
+      `/session/${sessionId}/appium/device/current_package`,
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+async function activateBlinkitApp(sessionId: string): Promise<void> {
+  await appiumRequest(`/session/${sessionId}/execute/sync`, {
+    body: JSON.stringify({
+      args: [{ appId: BLINKIT_PACKAGE }],
+      script: 'mobile: activateApp',
+    }),
+    method: 'POST',
+  });
+}
+
 async function elementAttribute(
   sessionId: string,
   id: string,
@@ -147,6 +167,9 @@ function productTokens(value: string): string[] {
     .replace(/\blay['’]?s\b|\blayers\b/g, 'lays')
     .replace(/\bdoodh\b|\bdudh\b/g, 'milk')
     .replace(/\btaza\b|\btazaa\b/g, 'taaza')
+    .replace(/\bgrams?\b/g, 'g')
+    .replace(/\bkilograms?\b|\bkgs?\b/g, 'kg')
+    .replace(/\bmillilit(?:er|re)s?\b|\bmls?\b/g, 'ml')
     .replace(/\blitres?\b|\bliters?\b/g, 'l')
     .replace(/[^a-z0-9]+/g, ' ')
     .trim()
@@ -164,6 +187,14 @@ function matchesRequestedProduct(request: string, product: string, size?: string
   const requested = productTokens(request);
   const available = new Set(productTokens(`${product} ${size ?? ''}`));
   return requested.length > 0 && requested.every((token) => available.has(token));
+}
+
+function hasExactProductIntent(request: string, size?: string): boolean {
+  const requested = new Set(productTokens(request));
+  if (requested.size < 2) return false;
+
+  const sizeTokens = productTokens(size ?? '');
+  return sizeTokens.length === 0 || sizeTokens.every((token) => requested.has(token));
 }
 
 export async function readPhoneStatus() {
@@ -211,13 +242,7 @@ async function activeBlinkitSession(): Promise<string> {
   const sessionId = blinkitSessionId ?? await createBlinkitSession();
 
   try {
-    await appiumRequest(`/session/${sessionId}/execute/sync`, {
-      body: JSON.stringify({
-        args: [{ appId: BLINKIT_PACKAGE }],
-        script: 'mobile: activateApp',
-      }),
-      method: 'POST',
-    });
+    await activateBlinkitApp(sessionId);
   } catch {
     blinkitSessionId = undefined;
     return createBlinkitSession();
@@ -237,13 +262,14 @@ export async function openBlinkit() {
   };
 }
 
-export async function prepareGrocery(request: string) {
+export async function prepareGrocery(request: string, requestedSearchQuery?: string) {
   const query = request.trim();
   if (!query) throw new Error('A grocery product is required.');
-  const searchQuery = searchQueryFor(query);
+  const searchQuery = searchQueryFor(requestedSearchQuery?.trim() || query);
 
   await publishOverlayStatus(`Searching for ${searchQuery}`, 'searching');
   const sessionId = await activeBlinkitSession();
+  await new Promise((resolve) => setTimeout(resolve, 700));
   let searchInput: string | undefined;
   for (let screenAttempt = 0; screenAttempt < 5 && !searchInput; screenAttempt += 1) {
     searchInput = await findElement(
@@ -269,8 +295,14 @@ export async function prepareGrocery(request: string) {
     }
 
     if (!searchInput && screenAttempt < 4) {
-      await publishOverlayStatus('Returning to Blinkit search', 'working');
-      await navigateBack(sessionId);
+      const activePackage = await currentAppPackage(sessionId);
+      if (activePackage !== BLINKIT_PACKAGE) {
+        await publishOverlayStatus('Reopening Blinkit', 'working');
+        await activateBlinkitApp(sessionId);
+      } else {
+        await publishOverlayStatus('Returning to Blinkit search', 'working');
+        await navigateBack(sessionId);
+      }
       await new Promise((resolve) => setTimeout(resolve, 700));
     }
   }
@@ -329,11 +361,17 @@ export async function prepareGrocery(request: string) {
     }
   }
 
-  const matches = [...uniqueCandidates.values()].filter((candidate) =>
+  const matchingCandidates = [...uniqueCandidates.values()].filter((candidate) =>
     matchesRequestedProduct(query, candidate.product, candidate.size));
+  const exactMatches = matchingCandidates.filter((candidate) =>
+    hasExactProductIntent(query, candidate.size));
 
-  if (matches.length !== 1) {
-    const options = (matches.length > 1 ? matches : [...uniqueCandidates.values()])
+  if (exactMatches.length !== 1) {
+    const options = (
+      matchingCandidates.length > 0
+        ? matchingCandidates
+        : [...uniqueCandidates.values()]
+    )
       .slice(0, 5)
       .map(({ product, size, price }) => ({ product, size, price }));
 
@@ -351,13 +389,13 @@ export async function prepareGrocery(request: string) {
       status: 'needs_clarification',
       request: query,
       options,
-      message: matches.length > 1
+      message: matchingCandidates.length > 0
         ? `I found multiple matching products. Ask the user to choose the exact product and size shown on screen.`
         : `I could not uniquely match “${query}”. Ask the user which visible product and size they want.`,
     };
   }
 
-  const { cardId: productCard, product, price, size } = matches[0]!;
+  const { cardId: productCard, product, price, size } = exactMatches[0]!;
 
   const existingQuantity = await findElement(
     sessionId,
