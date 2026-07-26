@@ -21,6 +21,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.IBinder;
 import android.view.Gravity;
+import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
@@ -125,7 +126,7 @@ public final class OverlayService extends Service {
 
         return new Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("ErrandOS is ready")
-            .setContentText("Tap the floating pill to speak")
+            .setContentText("Hold the floating button to speak")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentIntent(pending)
             .setOngoing(true)
@@ -137,7 +138,7 @@ public final class OverlayService extends Service {
         statusView = new ImageButton(this);
         statusView.setImageResource(android.R.drawable.ic_btn_speak_now);
         statusView.setColorFilter(Color.WHITE);
-        statusView.setContentDescription("ErrandOS. Tap to speak.");
+        statusView.setContentDescription("ErrandOS. Press and hold to speak.");
         statusView.setPadding(dp(17), dp(17), dp(17), dp(17));
         statusView.setScaleType(ImageButton.ScaleType.FIT_CENTER);
         statusView.setBackground(backgroundFor("ready"));
@@ -162,47 +163,34 @@ public final class OverlayService extends Service {
 
     private void installTouchBehavior() {
         statusView.setOnTouchListener(new View.OnTouchListener() {
-            private float downX;
-            private float downY;
-            private int startX;
-            private int startY;
-            private boolean moved;
-
             @Override
             public boolean onTouch(View view, MotionEvent event) {
                 if (event.getAction() == MotionEvent.ACTION_DOWN) {
-                    downX = event.getRawX();
-                    downY = event.getRawY();
-                    startX = layoutParams.x;
-                    startY = layoutParams.y;
-                    moved = false;
+                    view.setPressed(true);
+                    view.setScaleX(0.92f);
+                    view.setScaleY(0.92f);
+                    view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK);
+                    if (uploading) {
+                        setStatus("Still working on your last request.", "working");
+                    } else if (!recording) {
+                        startRecording();
+                    }
                     return true;
                 }
-                if (event.getAction() == MotionEvent.ACTION_MOVE) {
-                    int dx = Math.round(event.getRawX() - downX);
-                    int dy = Math.round(event.getRawY() - downY);
-                    moved = moved || Math.abs(dx) > dp(6) || Math.abs(dy) > dp(6);
-                    layoutParams.x = startX + dx;
-                    layoutParams.y = Math.max(dp(20), startY + dy);
-                    windowManager.updateViewLayout(statusView, layoutParams);
+                if (
+                    event.getAction() == MotionEvent.ACTION_UP
+                        || event.getAction() == MotionEvent.ACTION_CANCEL
+                ) {
+                    view.setPressed(false);
+                    view.setScaleX(1f);
+                    view.setScaleY(1f);
+                    if (event.getAction() == MotionEvent.ACTION_UP) view.performClick();
+                    if (recording) stopRecording();
                     return true;
                 }
-                if (event.getAction() == MotionEvent.ACTION_UP) {
-                    if (!moved) toggleRecording();
-                    return true;
-                }
-                return false;
+                return true;
             }
         });
-    }
-
-    private void toggleRecording() {
-        if (uploading) {
-            setStatus("Still working on your last request…", "working");
-            return;
-        }
-        if (recording) stopRecording();
-        else startRecording();
     }
 
     private void startRecording() {
@@ -230,7 +218,7 @@ public final class OverlayService extends Service {
             recorder.prepare();
             recorder.start();
             recording = true;
-            setStatus("Listening. Tap again when finished.", "listening");
+            setStatus("Listening while you hold.", "listening");
         } catch (Exception error) {
             releaseRecorder();
             setStatus("I couldn't start the microphone.", "error");
@@ -242,7 +230,7 @@ public final class OverlayService extends Service {
             recorder.stop();
         } catch (RuntimeException error) {
             releaseRecorder();
-            setStatus("I didn't hear enough audio. Tap and try again.", "error");
+            setStatus("I didn't hear enough audio. Hold and try again.", "error");
             return;
         }
         releaseRecorder();
