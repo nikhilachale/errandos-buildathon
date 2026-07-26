@@ -1,67 +1,59 @@
-# ErrandOS — Buildathon Edition
+# ErrandOS
 
-ErrandOS turns a natural-language errand request into a reviewable, transaction-safe action.
+ErrandOS turns a spoken or written errand into a reviewable, transaction-safe
+action. This repository contains two first-class ways to run it.
 
-It is designed as the execution layer beneath Hermes:
+## Implementations
 
-- Hermes understands the request and decides which typed tool to call.
-- ErrandOS reads provider state, prepares exact terms, enforces approval and idempotency, and records the outcome.
-- Provider integrations remain behind narrow adapters so chat never receives raw device controls, credentials, or session state.
+### Hosted
 
-## Buildathon goal
+[`hosted/`](hosted/) is the Hermes-oriented hosted implementation. It contains
+the web interface, control plane, workers, typed MCP tools, provider adapters,
+durable transaction state, and remote Android-worker infrastructure.
 
-Build one convincing vertical slice for everyday errands in India:
+See [the hosted overview](hosted/HOSTED.md) and
+[hosted setup guide](hosted/README.md).
 
-```text
-voice or text request
-  → Hermes intent and orchestration
-  → typed ErrandOS tools
-  → Blinkit product search and cart preparation
-  → exact terms for review
-  → explicit approval boundary
-  → receipt or reconciliation status
+### Local
+
+[`local/`](local/) is the phone-first implementation used for the buildathon
+demo. A circular push-to-talk overlay records while held, uses Sarvam for
+Indian-language speech recognition and speech generation, asks spoken
+follow-up questions when a product is ambiguous, and drives the official app
+through Appium on the Mac.
+
+See [the local overview](local/LOCAL.md), [product description](local/docs/PRODUCT.md),
+and [build log](local/docs/BUILD_LOG.md).
+
+## Safety boundary
+
+- Searching and cart preparation may interact with the provider app.
+- A broad product request asks the user to choose instead of silently selecting
+  a top result.
+- Preparation never silently places an order.
+- Exact cart and checkout terms are reviewed before any final action.
+- Final paid actions require explicit confirmation, idempotency, and verified
+  provider evidence.
+- An uncertain result is recorded as ambiguous and checked read-only instead
+  of blindly retried.
+
+## Setup
+
+Each implementation is an independent pnpm workspace:
+
+```bash
+pnpm --dir local install
+pnpm --dir local test
+
+pnpm --dir hosted install
+pnpm --dir hosted test
 ```
 
-The first demo is intentionally narrower than the long-term product. It prioritizes a reliable Blinkit grocery flow over fragile multi-provider automation.
+Copy the relevant template before running:
 
-## Transaction guarantees
+- Hosted: `hosted/.env.example` → `hosted/.env`
+- Local voice server: `local/apps/voice/.env.example` →
+  `local/apps/voice/.env.local`
 
-- Preparation never silently places an order.
-- Exact items, quantities, prices, fees, address label, payment mode, ETA, and expiry are bound to an immutable proposal.
-- Material changes produce a new proposal.
-- Every final action requires an idempotency key.
-- A final provider action is attempted at most once.
-- An uncertain outcome becomes `ambiguous` and is reconciled with read-only checks.
-- Success is shown only when a receipt or provider reference is verified.
-
-## Initial scope
-
-### MVP
-
-- Text-first request interface, with voice as a progressive enhancement.
-- Product search through a typed provider adapter.
-- Cart proposal preparation with exact terms.
-- Human-readable proposal review.
-- Explicit approval boundary with commits disabled by default.
-- Durable receipt and status model.
-- A deterministic demo provider for repeatable judging.
-
-### Stretch
-
-- Supervised Blinkit login.
-- Prepare-only interaction with the official Blinkit Android app.
-- Sarvam-powered multilingual voice input/output.
-- One low-value COD canary with explicit owner authorization.
-
-### Not in the first slice
-
-- Multi-provider checkout.
-- Automatic ride booking.
-- Full subscription or team account systems.
-- Any claim of a successful external action without verified evidence.
-
-## Repository status
-
-This buildathon implementation starts with product scope and architecture on 26 July 2026. Implementation work and verification evidence will be added as dated, focused commits.
-
-See [the build log](docs/BUILD_LOG.md) for the chronological record.
+Real env files are intentionally ignored and stay only on the development
+machine. Only safe `.env.example` templates are committed.
